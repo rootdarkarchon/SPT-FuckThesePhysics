@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Copy to Directory.Build.local.props and point at your SPT installation. -->
+    <SptInstallPath Condition="'$(SptInstallPath)' == ''">D:\Tarkov-SPT-4.1</SptInstallPath>
+  </PropertyGroup>
+</Project>

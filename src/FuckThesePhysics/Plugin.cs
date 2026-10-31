@@ -1,0 +1,105 @@
+using System;
+using System.Globalization;
+using System.IO;
+using System.Text;
+using BepInEx;
+using BepInEx.Configuration;
+using BepInEx.Logging;
+using UnityEngine;
+
+namespace FuckThesePhysics
+{
+    // Releases landed airdrop crates and the parked BTR suspension body from EFT's physics registry
+    // (PhysicsExtensions.UpdateController._rigidbodies), so they stop holding the script-driven physics step open: this
+    // writes physics registry state (see AirdropRelease, BtrSuspensionRelease).
+    // Diagnostics: physics gate log, F9 registry/timing report and an opt-in airdrop spawn key.
+    [BepInPlugin(PluginInfo.Guid, PluginInfo.Name, PluginInfo.Version)]
+    public sealed class Plugin : BaseUnityPlugin
+    {
+        internal static ManualLogSource Log;
+        ConfigEntry<bool> releaseLanded;
+        ConfigEntry<bool> releaseBtr;
+        ConfigEntry<KeyboardShortcut> spawnKey;
+        ConfigEntry<bool> logGate;
+        ConfigEntry<KeyboardShortcut> reportKey;
+        string reportDirectory;
+
+        // Display metadata only. ConfigurationManager discovers categories in bind order, then sorts settings by descending Order.
+        // Advanced settings stay hidden until "Advanced settings" is enabled in ConfigurationManager.
+        static ConfigDescription Describe(string category, string name, int order, string description, bool advanced = false) =>
+            new ConfigDescription(description, null, new ConfigurationManagerAttributes
+            {
+                Category = category, DispName = name, Order = order, Description = description, IsAdvanced = advanced
+            });
+
+        void Awake()
+        {
+            Log = Logger;
+            releaseLanded = Config.Bind("Airdrop", "ReleaseLandedAirdrops", true,
+                Describe("1. Airdrop", "Release landed airdrops", 100,
+                    "Once an airdrop crate has landed, unregister it from EFT's physics registry so it stops keeping the physics step running. Loot and collision are unaffected. Applies live; turning it off restores vanilla behaviour for crates that land afterwards."));
+            releaseBtr = Config.Bind("BTR", "ReleaseParkedSuspension", true,
+                Describe("2. BTR", "Release parked BTR suspension", 100,
+                    "When the BTR stops and its suspension switches off, unregister the suspension body from EFT's physics registry so a parked BTR stops keeping the physics step running. The game registers it again when the BTR drives off. Applies from the next stop; turning it off restores vanilla behaviour. Affects every client that renders the BTR (Woods), including Fika clients."));
+            spawnKey = Config.Bind("Debug", "SpawnAirdropKey", new KeyboardShortcut(),
+                Describe("3. Debug", "Spawn airdrop key", 100,
+                    "Debug key (unset by default): call in a real airdrop (plane, parachute drop, landing) at the drop point nearest to you while in raid. Only works where this client owns the airdrop manager (offline raids, Fika host).", true));
+            logGate = Config.Bind("Debug", "LogPhysicsGate", false,
+                Describe("3. Debug", "Log physics gate", 90,
+                    "Log every change of the physics step gate (Simulation.UpdateEnabled) together with the number of registered rigidbodies to BepInEx/LogOutput.log. Logs on change only.", true));
+            reportKey = Config.Bind("Report", "Key", new KeyboardShortcut(),
+                Describe("4. Report", "Report key", 100,
+                    "Debug key (unset by default): write a physics registry and step timing report to BepInEx/LogOutput.log and the plugin's reports folder.", true));
+            reportDirectory = Path.Combine(Path.GetDirectoryName(Info.Location) ?? BepInEx.Paths.PluginPath, "reports");
+            try { SimulateTimer.Install(PluginInfo.Guid); }
+            catch (Exception error) { Log.LogWarning("Physics step timer unavailable: " + error.Message); }
+            try { AirdropRelease.Install(PluginInfo.Guid, releaseLanded); }
+            catch (Exception error) { Log.LogWarning("Airdrop release unavailable: " + error.Message); }
+            try { BtrSuspensionRelease.Install(PluginInfo.Guid, releaseBtr); }
+            catch (Exception error) { Log.LogWarning("BTR suspension release unavailable: " + error.Message); }
+            Log.LogInfo(PluginInfo.Name + " " + PluginInfo.Version + " ready.");
+        }
+
+        void Update()
+        {
+            if (reportKey.Value.IsDown()) WriteReport();
+            if (spawnKey.Value.IsDown()) AirdropSpawner.Spawn();
+            if (logGate.Value) GateLog.Tick(); else GateLog.Reset();
+        }
+
+        void OnDestroy()
+        {
+            BtrSuspensionRelease.Uninstall();
+            AirdropRelease.Uninstall();
+            SimulateTimer.Uninstall();
+        }
+
+        void WriteReport()
+        {
+            var report = new StringBuilder();
+            report.Append("# FuckThesePhysics report ").Append(DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture))
+                .Append(" frame=").Append(Time.frameCount).AppendLine();
+            var camera = Camera.main;
+            if (camera != null) report.Append("camera=").Append(camera.transform.position.ToString("F1")).AppendLine();
+            Section(report, "Physics step timing", SimulateTimer.Write);
+            Section(report, "What keeps the physics step running", SimulationOwners.Write);
+            string text = report.ToString();
+            Log.LogInfo(text);
+            try
+            {
+                Directory.CreateDirectory(reportDirectory);
+                string file = Path.Combine(reportDirectory, "physics-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".txt");
+                File.WriteAllText(file, text);
+                Log.LogInfo("Physics report saved: " + file);
+            }
+            catch (Exception error) { Log.LogWarning("Physics report file write failed: " + error.Message); }
+        }
+
+        static void Section(StringBuilder report, string title, Action<StringBuilder> writer)
+        {
+            report.AppendLine().Append("## ").AppendLine(title);
+            try { writer(report); }
+            catch (Exception error) { report.Append("section failed: ").AppendLine(error.ToString()); }
+        }
+    }
+}

@@ -1,0 +1,29 @@
+# Build, packages, Unity validation projects and runtime captures
+**/bin/
+*.zip
+**/obj/
+/artifacts/
+/TestResults/
+/BepInEx/
+**/Library/
+**/Temp/
+**/Logs/
+**/UserSettings/
+
+# Local SPT install path
+Directory.Build.local.props
+
+# Local editor and agent state
+.vs/
+.vscode/
+.idea/
+.claude/
+.codex/
+.agents/
+*.user
+*.suo
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db

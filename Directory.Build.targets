@@ -1,0 +1,19 @@
+<Project>
+  <Target Name="RequireSptInstallPath" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="'$(SptInstallPath)' == ''" Text="Set SptInstallPath with -p:SptInstallPath=..., Directory.Build.local.props, or the SPT_INSTALL_PATH environment variable (in that order)." />
+    <Error Condition="'$(SptInstallPath)' != '' and !Exists('$(SptInstallPath)/BepInEx/core/BepInEx.dll')" Text="SptInstallPath '$(SptInstallPath)' does not contain BepInEx/core/BepInEx.dll." />
+    <Error Condition="'$(SptInstallPath)' != '' and !Exists('$(SptInstallPath)/EscapeFromTarkov_Data/Managed/Assembly-CSharp.dll')" Text="SptInstallPath '$(SptInstallPath)' does not contain EscapeFromTarkov_Data/Managed/Assembly-CSharp.dll." />
+  </Target>
+  <Target Name="GeneratePluginInfo" BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <_FtpPluginInfoFile>$(IntermediateOutputPath)PluginInfo.g.cs</_FtpPluginInfoFile>
+    </PropertyGroup>
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <WriteLinesToFile File="$(_FtpPluginInfoFile)" Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8"
+      Lines="namespace $(RootNamespace)&#xA;{&#xA;    internal static class PluginInfo&#xA;    {&#xA;        public const string Guid = &quot;$(FtpPluginGuid)&quot;%3B&#xA;        public const string Name = &quot;$(FtpPluginName)&quot;%3B&#xA;        public const string Version = &quot;$(Version)&quot;%3B&#xA;    }&#xA;}" />
+    <ItemGroup>
+      <Compile Include="$(_FtpPluginInfoFile)" />
+      <FileWrites Include="$(_FtpPluginInfoFile)" />
+    </ItemGroup>
+  </Target>
+</Project>

@@ -1,0 +1,20 @@
+<Project>
+  <PropertyGroup>
+    <FtpPluginGuid>com.rootdarkarchon.fuckthesephysics</FtpPluginGuid>
+    <FtpPluginName>Fuck These Physics</FtpPluginName>
+    <FtpSptLabel>SPT4.1</FtpSptLabel>
+    <Version>1.0.0</Version>
+    <Authors>rootdarkarchon</Authors>
+    <Company>$(Authors)</Company>
+    <Product>$(FtpPluginName)</Product>
+    <Copyright>Copyright (c) 2026 $(Authors)</Copyright>
+    <AssemblyVersion>$(Version).0</AssemblyVersion>
+    <FileVersion>$(AssemblyVersion)</FileVersion>
+    <InformationalVersion>$(Version)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+  <Import Project="$(MSBuildThisFileDirectory)Directory.Build.local.props" Condition="Exists('$(MSBuildThisFileDirectory)Directory.Build.local.props')" />
+  <PropertyGroup>
+    <SptInstallPath Condition="'$(SptInstallPath)' == ''">$(SPT_INSTALL_PATH)</SptInstallPath>
+  </PropertyGroup>
+</Project>

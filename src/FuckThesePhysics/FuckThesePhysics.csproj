@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework><LangVersion>latest</LangVersion>
+    <AssemblyName>FuckThesePhysics</AssemblyName>
+    <RootNamespace>FuckThesePhysics</RootNamespace>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <OutputPath>../../obj/FuckThesePhysics/plugin/</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+  <ItemDefinitionGroup><Reference><Private>false</Private></Reference></ItemDefinitionGroup>
+  <ItemGroup>
+    <Compile Include="Plugin.cs"/>
+    <Compile Include="SimulationOwners.cs"/>
+    <Compile Include="SimulateTimer.cs"/>
+    <Compile Include="ConfigurationManagerAttributes.cs"/>
+    <Compile Include="AirdropRelease.cs"/>
+    <Compile Include="BtrSuspensionRelease.cs"/>
+    <Compile Include="AirdropSpawner.cs"/>
+    <Compile Include="GateLog.cs"/>
+    <Reference Include="Assembly-CSharp"><HintPath>$(SptInstallPath)/EscapeFromTarkov_Data/Managed/Assembly-CSharp.dll</HintPath></Reference>
+    <Reference Include="Comfort"><HintPath>$(SptInstallPath)/EscapeFromTarkov_Data/Managed/Comfort.dll</HintPath></Reference>
+    <Reference Include="BepInEx"><HintPath>$(SptInstallPath)/BepInEx/core/BepInEx.dll</HintPath></Reference>
+    <Reference Include="0Harmony"><HintPath>$(SptInstallPath)/BepInEx/core/0Harmony.dll</HintPath></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(SptInstallPath)/EscapeFromTarkov_Data/Managed/UnityEngine.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(SptInstallPath)/EscapeFromTarkov_Data/Managed/UnityEngine.CoreModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(SptInstallPath)/EscapeFromTarkov_Data/Managed/UnityEngine.PhysicsModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(SptInstallPath)/EscapeFromTarkov_Data/Managed/UnityEngine.InputLegacyModule.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>
