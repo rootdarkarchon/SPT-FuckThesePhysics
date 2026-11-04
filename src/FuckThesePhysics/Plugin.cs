@@ -11,7 +11,8 @@ namespace FuckThesePhysics
 {
     // Releases landed airdrop crates and the parked BTR suspension body from EFT's physics registry
     // (PhysicsExtensions.UpdateController._rigidbodies), so they stop holding the script-driven physics step open: this
-    // writes physics registry state (see AirdropRelease, BtrSuspensionRelease).
+    // writes physics registry state (see AirdropRelease, BtrSuspensionRelease). It also skips the per-call head extrusion of
+    // players whose head collider is disabled (see DisabledExtrusionSkip).
     // Diagnostics: physics gate log, F9 registry/timing report and an opt-in airdrop spawn key.
     [BepInPlugin(PluginInfo.Guid, PluginInfo.Name, PluginInfo.Version)]
     public sealed class Plugin : BaseUnityPlugin
@@ -21,6 +22,8 @@ namespace FuckThesePhysics
         ConfigEntry<bool> releaseBtr;
         ConfigEntry<KeyboardShortcut> spawnKey;
         ConfigEntry<bool> logGate;
+        ConfigEntry<bool> skipExtrusion;
+        ConfigEntry<bool> verifyExtrusion;
         ConfigEntry<KeyboardShortcut> reportKey;
         string reportDirectory;
 
@@ -50,6 +53,12 @@ namespace FuckThesePhysics
             reportKey = Config.Bind("Report", "Key", new KeyboardShortcut(),
                 Describe("4. Report", "Report key", 100,
                     "Debug key (unset by default): write a physics registry and step timing report to BepInEx/LogOutput.log and the plugin's reports folder.", true));
+            skipExtrusion = Config.Bind("Movement", "SkipDisabledHeadExtrusion", true,
+                Describe("5. Movement", "Skip head extrusion for disabled colliders", 100,
+                    "Skip the per-call head collision extrusion (ColliderExtrusion.Calculate) for extruders whose collider is disabled or inactive, and use a zero depenetration instead. The game disables the head collider of every player except the local one, which makes the query run with an empty bounds box (radius 0 at a point near the world origin); the result is expected to be zero unless the character stands near the origin. Applies live; turning it off restores vanilla behaviour from the next call."));
+            verifyExtrusion = Config.Bind("Debug", "VerifyExtrusionSkip", false,
+                Describe("3. Debug", "Verify extrusion skip", 80,
+                    "Run vanilla for the calls that would be skipped and count how many return a non-zero depenetration in the report (Report / Key). Only acts while Movement / SkipDisabledHeadExtrusion is on. There is no performance gain while this is on.", true));
             reportDirectory = Path.Combine(Path.GetDirectoryName(Info.Location) ?? BepInEx.Paths.PluginPath, "reports");
             try { SimulateTimer.Install(PluginInfo.Guid); }
             catch (Exception error) { Log.LogWarning("Physics step timer unavailable: " + error.Message); }
@@ -57,6 +66,8 @@ namespace FuckThesePhysics
             catch (Exception error) { Log.LogWarning("Airdrop release unavailable: " + error.Message); }
             try { BtrSuspensionRelease.Install(PluginInfo.Guid, releaseBtr); }
             catch (Exception error) { Log.LogWarning("BTR suspension release unavailable: " + error.Message); }
+            try { DisabledExtrusionSkip.Install(PluginInfo.Guid + ".extrusionskip", skipExtrusion, verifyExtrusion); }
+            catch (Exception error) { Log.LogWarning("Disabled-collider extrusion skip unavailable: " + error.Message); }
             Log.LogInfo(PluginInfo.Name + " " + PluginInfo.Version + " ready.");
         }
 
@@ -69,6 +80,7 @@ namespace FuckThesePhysics
 
         void OnDestroy()
         {
+            DisabledExtrusionSkip.Uninstall();
             BtrSuspensionRelease.Uninstall();
             AirdropRelease.Uninstall();
             SimulateTimer.Uninstall();
@@ -83,6 +95,7 @@ namespace FuckThesePhysics
             if (camera != null) report.Append("camera=").Append(camera.transform.position.ToString("F1")).AppendLine();
             Section(report, "Physics step timing", SimulateTimer.Write);
             Section(report, "What keeps the physics step running", SimulationOwners.Write);
+            Section(report, "Disabled-collider extrusion skip", DisabledExtrusionSkip.Write);
             string text = report.ToString();
             Log.LogInfo(text);
             try

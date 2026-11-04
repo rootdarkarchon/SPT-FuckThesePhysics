@@ -1,6 +1,6 @@
 # Fuck These Physics: design
 
-Developer-facing description of what v1.0.0 does, why, and how it was checked. User-facing documentation is in `README.md`.
+Developer-facing description of what v1.1.0 does, why, and how it was checked. User-facing documentation is in `README.md`.
 
 Tags used where the status still matters: **CONFIRMED** = read in decompiled code, prefab data or the in-game log. **[INFERENCE]** = reasoned, not observed. **UNVERIFIED** = not checked.
 
@@ -11,9 +11,11 @@ EFT runs its physics step (`Physics.Simulate`) from script and only when somethi
 - the landed airdrop crate (offline and Fika host);
 - the BTR suspension body (Woods; every machine that renders the BTR).
 
-This mod unregisters those two bodies at the point where the game itself no longer needs them. It uses EFT's own `UnsupportRigidbody`; nothing else about physics is changed. The cost of the step is established from earlier raid measurements (it is why Rupture moved ragdolls to an external PhysX world); this project does not re-measure it.
+This mod unregisters those two bodies at the point where the game itself no longer needs them. It uses EFT's own `UnsupportRigidbody`; it changes nothing else about physics. The cost of the step is established from earlier raid measurements (it is why Rupture moved ragdolls to an external PhysX world); this project does not re-measure it.
 
-Non-goals: changing EFT's physics driver or `CheckRigidbodiesDone` semantics, airdrop scheduling or loot, per-map drop-point coverage.
+A second feature skips the head-collision query for disabled player colliders, which are the bots' head colliders. It does not touch physics registration. It changes how one overlap query is computed, to cut main-thread time (§12). Its runtime verification is not yet done.
+
+Non-goals: changing EFT's physics driver or `CheckRigidbodiesDone` semantics, airdrop scheduling or loot, per-map drop-point coverage, replacing the penetration computation, and batching the character controller's neighbour queries (research §3.3, not implemented).
 
 | Component | Version |
 |---|---|
@@ -24,7 +26,7 @@ Non-goals: changing EFT's physics driver or `CheckRigidbodiesDone` semantics, ai
 
 Fika analysis was done against 2.4.4. The mod targets Fika 2.4.x generally (2.4.6 is expected to behave the same); no Fika version gating exists in code.
 
-Identity: plugin name "Fuck These Physics", GUID `com.rootdarkarchon.fuckthesephysics`, output `BepInEx/plugins/FuckThesePhysics/FuckThesePhysics.dll`, package `FuckThesePhysics-1.0.0-SPT4.1.zip`.
+Identity: plugin name "Fuck These Physics", version 1.1.0, GUID `com.rootdarkarchon.fuckthesephysics`, output `BepInEx/plugins/FuckThesePhysics/FuckThesePhysics.dll`, package `FuckThesePhysics-1.1.0-SPT4.1.zip`. The disabled-collider extrusion skip (§12) uses the Harmony id `com.rootdarkarchon.fuckthesephysics.extrusionskip`.
 
 ### Configuration
 
@@ -32,9 +34,11 @@ Identity: plugin name "Fuck These Physics", GUID `com.rootdarkarchon.fucktheseph
 |---|---|---|---|
 | `Airdrop / ReleaseLandedAirdrops` | bool | on | Live. Read on every `ManualUpdate` postfix; off restores vanilla for crates that land afterwards. |
 | `BTR / ReleaseParkedSuspension` | bool | on | Applies from the next BTR stop. |
+| `Movement / SkipDisabledHeadExtrusion` | bool | on | Live. Off restores the vanilla head-collision query for disabled colliders from the next frame. See §12. |
 | `Debug / SpawnAirdropKey` | `KeyboardShortcut` | unset | Advanced. Polled in `Plugin.Update`. |
 | `Debug / LogPhysicsGate` | bool | off | Advanced. See §8. |
 | `Report / Key` | `KeyboardShortcut` | unset | Advanced. Writes the registry and step timing report. See §8. |
+| `Debug / VerifyExtrusionSkip` | bool | off | Advanced. Runs vanilla for skipped calls and counts non-zero results in the report. No gain while on. See §12. |
 
 Advanced entries are hidden unless "Advanced settings" is enabled in Configuration Manager.
 
@@ -206,6 +210,7 @@ All read-only and independent of the fixes.
 - **`SimulationOwners.cs`** (part of the `Report / Key` report). Dumps `UpdateController._rigidbodies` under the exact `CheckRigidbodiesDone` rule: each entry is marked as counting or not, with its path, visibility state, colliders and the script types on it and its ancestors. Entries are grouped by owner, with a closing verdict line of the form `N entries count toward keeping simulation on; owner types among them: …`.
 - **`SimulateTimer.cs`** (part of the `Report / Key` report). Observation-only Harmony prefix/postfix pairs on `PhysicsExtensions.Simulation.Update`, `UnityEngine.Physics.Simulate(float)` and a prefix on `PhysicsExtensions.UpdateController.SimulationEnabled(bool)`. Per reporting window: call counts, total/max milliseconds, percentiles from a 4096-sample ring buffer, and the last 32 enable/disable transitions.
 - **Report.** `Report / Key` writes both sections to the BepInEx log and to `BepInEx/plugins/FuckThesePhysics/reports/`.
+- **Disabled-collider extrusion skip counters** (part of the `Report / Key` report). Since the last report: skipped calls, vanilla-verified calls, non-zero results and max magnitude in verify mode, and the last non-zero sample. Plain counters, reset on each report. See §12.
 - **Lifecycle log lines** (BepInEx logger, because EFT suppresses `Debug.Log`): crate `Init`, `Landed` (with release on/off), `release` (removed / remainingRegistry / simulationEnabled), `IsStatic`; and one line per BTR suspension release.
 
 ## 9. Who is affected
@@ -218,6 +223,8 @@ All read-only and independent of the fixes.
 
 Neither Fika nor Rupture patches `ServerAirDrop.ManualUpdate`, `ServerAirDrop.Init`, `PhysicsExtensions` or `VehicleSuspension`, so there are no Harmony conflicts among the targets. ORBIT's `AirdropLandedPatch` hooks `ClientAirDrop.PlayLandingSound`, a different method.
 
+Extrusion skip (§12) runs wherever the head extrusion runs for bots: offline, the Fika host and headless hosts. A Fika client's own player has an enabled collider, so nothing is skipped there, and remote players never run the extrusion there.
+
 ## 10. Rejected alternatives
 
 - **Patch `CheckRigidbodiesDone` to ignore kinematic bodies.** Changes the gate for every registrant (global blast radius).
@@ -227,11 +234,11 @@ Neither Fika nor Rupture patches `ServerAirDrop.ManualUpdate`, `ServerAirDrop.In
 - **Destroy the crate rigidbody, deactivate the GameObject, or toggle `isKinematic`.** `Init` dereferences the rigidbody again on pool reuse; the others change game state for no gain.
 - **BTR: dedupe in a `SuspensionOn` prefix.** Marginal once the `SuspensionOff` release exists (entries are at most 1 at any time), and does not fix the parked-hold by itself.
 - **BTR: skip the suspension entirely, as EFT does on Streets.** Changes visuals on Woods and removes the BTR from the gate even while driving. Needs an explicit policy decision and prefab data that is UNVERIFIED.
-- **Trigger the debug airdrop through server config or Fika commands.** See §7 dead ends.
+- **Movement collision batching of the head query (v1.1.0 development build, dropped).** It ran only for the local player: `PlayerOverlapManager.Init` ends with `Off()`, and only `GamePlayerOwner` calls `On()`, so bots never got a batch slot. In game (research §8), 252,712 of 266,262 calls had no slot, and the batched path cost under 0.1% of the main thread. It is replaced by the disabled-collider skip (§12), which covers the bots without a batch. The batching code is removed; 1.1.0 was never released.
 
 ## 11. In-game verification
 
-Woods, Fika host, 2026-10-31, from `LogOutput.log`. The user ran this; it is the only runtime verification so far.
+Woods, Fika host, 2026-10-31, from `LogOutput.log`, for the airdrop and BTR fixes. The user ran this. The disabled-collider extrusion skip was verified separately by the user on 2026-11-04 (see §12).
 
 - **Airdrop.** Two debug-spawned crates. Each logged `release removed=1 remainingRegistry=0 simulationEnabled=False` right after `Landed`. Physics ran only during the fall (about 10,000 frames each). Both crates were lootable, solid and hittable. `IsStatic` was logged about 65,000 frames after landing for crate 2, which is why release is at `Landed`.
 - **BTR.** Three drive/stop cycles. Each stop logged `removed=1`, the gate was off while parked, and no entries accumulated.
@@ -245,9 +252,59 @@ Woods, Fika host, 2026-10-31, from `LogOutput.log`. The user ran this; it is the
 - Grenades and ragdolls while a crate is landed. Rupture replaces ragdolls, so this may not be observable.
 - Fika client: the BTR release on a client, and the client's handling of the crate `IsStatic` packet ([INFERENCE] harmless).
 - Maps other than Woods.
+- Disabled-collider extrusion skip (§12): Fika clients (expected no-op: a client's own player has an enabled collider).
 - Release paths of the UNVERIFIED registrants listed in §2.
 
-## 12. Research notes
+## 12. Disabled-collider extrusion skip (`src/FuckThesePhysics/DisabledExtrusionSkip.cs`)
+
+Status: implemented and **verified in game by the user (2026-11-04)**: works, and improves performance. It replaces the movement-collision batching built for v1.1.0 and dropped (§10). The verification numbers were not recorded in this repo.
+
+### Finding (CONFIRMED numbers, research §8)
+
+Source: the 2026-11-04 ETW capture (Streets, Fika host, about 23 bots) and the mod's physics report from the same session, both from the batching build.
+
+- `ColliderExtrusion.Calculate` was called 266,262 times: 11,006 batched and 255,256 vanilla. Of the vanilla calls, 252,712 had no batch slot.
+- `PlayerOverlapManager.Init` ends with `Off()`, which disables every head collider. Only `GamePlayerOwner` calls `On()`. Bots' head colliders therefore stay disabled.
+- `Collider.bounds` is empty for a disabled collider (Unity 2022.3 docs). Vanilla `CalculateCastRadius` and `RefreshNeighbours` read it, so the radius is 0 and the centre is `position + (bounds.center - transform.position)`: roughly the frame's motion vector, near the world origin.
+- With batching on, `RefreshNeighbours` was still 7.4% of the main thread (called through the vanilla fallback) and `gSphereVsMeshCallback` 4.1%.
+
+Each bot call therefore queries a point at the map origin and runs `CalculateDepenetration` against the bot's capsule at its real position. That gives zero penetration unless the bot is near the origin. Confirmed in game by the user (2026-11-04); `Debug / VerifyExtrusionSkip` stays available to re-check after game updates.
+
+### Behaviour
+
+Skipping Harmony prefix on `ColliderExtrusion.Calculate(Vector3, Quaternion, float)`. All callers reach it: `Calculate()`, `CalculateThroughMotion` and `PlayerOverlapManager.Calculate` (the rotation-prediction path).
+
+Gate: `_collider != null && (!_collider.enabled || !_collider.gameObject.activeInHierarchy)`, which is the case where `Collider.bounds` is empty. The gate is on collider state, not on "is a bot", so behaviour stays the same if anything enables a bot's collider.
+
+- Setting on, gate true, verify off: the prefix sets `_depenetration = Vector3.zero` and returns false. No overlap query and no penetration test run. Replacing the body is the point of this prefix. The neighbour buffer is not refreshed for these calls; [INFERENCE] nothing reads it while the collider is disabled (not checked).
+- Otherwise: vanilla runs.
+
+### Verify mode
+
+`Debug / VerifyExtrusionSkip`. Only acts while `Movement / SkipDisabledHeadExtrusion` is on. When on and the gate is true, the prefix runs vanilla and a postfix reads `GetDepenetration()`. It counts calls and non-zero results, tracks the maximum magnitude, and keeps the last non-zero sample (collider transform path, query centre, `_castRadius`, depenetration vector, frame). Nothing is logged per call. Verify mode gives no performance gain.
+
+### Report
+
+The `Disabled-collider extrusion skip` section of `Report / Key` shows: setting on/off, verify on/off, window length in frames, skipped calls, vanilla-verified calls, non-zero count, max magnitude and the last non-zero sample. Counters reset each time the report is written. The hot path allocates nothing.
+
+### Install and failure
+
+- Install resolves `ColliderExtrusion.Calculate(Vector3, Quaternion, float)` by name and parameter types (`MissingMethodException` with the full signature on a miss) and the private `Vector3 _depenetration` through a cached `AccessTools.FieldRefAccess` (field type checked; `MissingFieldException` on a miss). A miss logs a warning and nothing is patched.
+- Harmony owner id: `PluginInfo.Guid + ".extrusionskip"`. `Uninstall` unpatches that id.
+- An exception in the prefix or postfix is logged once, and the feature latches to vanilla until the game restarts.
+
+### Configuration
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `Movement / SkipDisabledHeadExtrusion` | bool | on | Live. Off restores the vanilla query for disabled colliders from the next call. |
+| `Debug / VerifyExtrusionSkip` | bool | off | Advanced. Runs vanilla for skipped calls and counts non-zero results in the report. No gain while on. |
+
+### Verification
+
+Verified in game by the user on 2026-11-04: the skip works and improves performance. No capture or report numbers were recorded in this repo.
+
+## 13. Research notes
 
 `docs/research/` holds the analysis done before implementation. These files predate the implementation and were written under the old working name "SPT-FuckThisAirdrop"; names, GUIDs and the recommended release point (`IsStatic`) in them are historical. Where they disagree with this document, this document wins.
 
@@ -259,3 +316,5 @@ Woods, Fika host, 2026-10-31, from `LogOutput.log`. The user ran this; it is the
 | `docs/research/physics-interop.md` | Interop with installed mods and Fika; PhysX pose safety after release |
 | `docs/research/airdrop-trigger-debug.md` | Airdrop scheduling, debug-spawn design, Fika host/client split |
 | `docs/research/mod-template.md` | Build/package template and config patterns |
+| `docs/research/movement-collision-batching.md` | Movement collision: profiler shares, hook analysis, the batching proposal, and §8 (result of the dropped 1.1.0 batching build and the disabled-collider finding that §12 implements). |
+| `docs/research/sync-transforms-investigation.md` | Physics.SyncTransforms cost: measured share, callers, the hitbox/trigger layer hypothesis, static findings and one in-raid experiment. Declined (2026-11-04): too little gain for the risk; the diagnostics were removed. |

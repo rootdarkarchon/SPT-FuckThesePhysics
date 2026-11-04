@@ -25,7 +25,7 @@ nothing. The game then behaves as vanilla.
 ## Installation
 
 1. Close the game.
-2. Extract `FuckThesePhysics-1.0.0-SPT4.1.zip` into your SPT game folder. The
+2. Extract `FuckThesePhysics-1.1.0-SPT4.1.zip` into your SPT game folder. The
    plugin ends up at `BepInEx/plugins/FuckThesePhysics/FuckThesePhysics.dll`.
 3. Start the game.
 
@@ -41,6 +41,7 @@ folder. You can also delete
 - **BTR.** When the BTR stops and the game switches its suspension off, the mod
   removes the suspension body from the registry. The game registers it again
   when the BTR drives off, so physics still runs while the BTR is moving.
+- **Movement collision.** The game disables the head collider of every bot. Its head-collision query then runs against empty bounds near the world origin, which is wasted work. The mod skips that query for disabled player colliders and returns zero instead, which is what the game's query yields for them. Set `Movement / SkipDisabledHeadExtrusion` off to run the game's query again. See [Fika](#fika) for who benefits.
 
 Looting, collision and bullet hits on crates keep working. The crate stays solid
 and hittable, and you can open it as usual. The mod does not move, hide or
@@ -58,6 +59,7 @@ it, and it turns off again when none are left.
 - **BTR:** every machine runs its own BTR suspension, so the release runs on every
   machine, including clients. Install the mod on the host and on every client.
   Installing it on a client is harmless for airdrops.
+- **Movement collision:** bots run on the host (or on a headless host), so the skip matters there, and offline play gets the same. A Fika client runs the query only for its own player, whose collider is enabled, so the skip does nothing on clients.
 
 ## Settings
 
@@ -68,6 +70,7 @@ Settings are available in BepInEx Configuration Manager and in
 |---|---|---|
 | `Airdrop / ReleaseLandedAirdrops` | on | Unregisters a crate from the physics registry when it lands. Applies live; when off, crates that land afterwards behave as vanilla. Host and offline only. |
 | `BTR / ReleaseParkedSuspension` | on | Unregisters the BTR suspension body each time the BTR stops. Applies from the next BTR stop; when off, the BTR behaves as vanilla. Runs on every machine, including Fika clients. |
+| `Movement / SkipDisabledHeadExtrusion` | on | Skips the head-collision query for disabled player colliders (the bots'), whose result is zero anyway. Applies live; when off, the game's query runs. See [Fika](#fika). |
 
 ### Advanced settings
 
@@ -80,6 +83,7 @@ the `.cfg` file.
 | `Debug / SpawnAirdropKey` | unset | Calls in a real airdrop (plane, parachute, landing) at the drop point nearest to you. |
 | `Debug / LogPhysicsGate` | off | Logs each time the physics step turns on or off, together with the number of registered rigidbodies. Only changes are logged. |
 | `Report / Key` | unset | Writes a report of the physics registry and step timing to the BepInEx log and to `BepInEx/plugins/FuckThesePhysics/reports/`. |
+| `Debug / VerifyExtrusionSkip` | off | Runs the game's query for the calls that would be skipped and counts non-zero results in the report. Only acts while `Movement / SkipDisabledHeadExtrusion` is on. No performance gain while on. |
 
 **Spawn key.** It only works where the game owns the airdrop logic: offline
 raids and the Fika host. It does nothing on a Fika client and logs "not host".
@@ -103,6 +107,7 @@ each BTR suspension release.
   drive and stop cycles. Crates were lootable, solid and hittable, and no
   entries accumulated. The following have not been tested: turning the setting
   off to reproduce the leak, grenades, ragdolls and Fika clients.
+- The disabled-collider skip was verified in game (works, improves performance). Fika clients were not tested; nothing is skipped there because a client's own player has an enabled collider. If the skip path throws an error, it switches itself off until the game restarts.
 
 ## Building from source
 
