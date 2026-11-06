@@ -19,6 +19,8 @@
     <Compile Include="AirdropSpawner.cs"/>
     <Compile Include="GateLog.cs"/>
     <Compile Include="DisabledExtrusionSkip.cs"/>
+    <Compile Include="ViewmodelInterpolation.cs"/>
+    <Compile Include="ViewmodelPoseTrace.cs"/>
     <Reference Include="Assembly-CSharp"><HintPath>$(SptInstallPath)/EscapeFromTarkov_Data/Managed/Assembly-CSharp.dll</HintPath></Reference>
     <Reference Include="Comfort"><HintPath>$(SptInstallPath)/EscapeFromTarkov_Data/Managed/Comfort.dll</HintPath></Reference>
     <Reference Include="BepInEx"><HintPath>$(SptInstallPath)/BepInEx/core/BepInEx.dll</HintPath></Reference>

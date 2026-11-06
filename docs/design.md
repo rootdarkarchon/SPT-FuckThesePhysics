@@ -1,6 +1,6 @@
 # Fuck These Physics: design
 
-Developer-facing description of what v1.1.0 does, why, and how it was checked. User-facing documentation is in `README.md`.
+Developer-facing description of what v1.2.0 does, why, and how it was checked. User-facing documentation is in `README.md`.
 
 Tags used where the status still matters: **CONFIRMED** = read in decompiled code, prefab data or the in-game log. **[INFERENCE]** = reasoned, not observed. **UNVERIFIED** = not checked.
 
@@ -15,6 +15,8 @@ This mod unregisters those two bodies at the point where the game itself no long
 
 A second feature skips the head-collision query for disabled player colliders, which are the bots' head colliders. It does not touch physics registration. It changes how one overlap query is computed, to cut main-thread time (§12). Its runtime verification is not yet done.
 
+A third feature (§13, version 1.2.0) interpolates the local first-person weapon, hands and camera between EFT's 50 Hz effector ticks. It targets viewmodel judder above the tick rate. It changes the presentation of the effector layer, not the simulation; its runtime verification is not yet done.
+
 Non-goals: changing EFT's physics driver or `CheckRigidbodiesDone` semantics, airdrop scheduling or loot, per-map drop-point coverage, replacing the penetration computation, and batching the character controller's neighbour queries (research §3.3, not implemented).
 
 | Component | Version |
@@ -26,7 +28,7 @@ Non-goals: changing EFT's physics driver or `CheckRigidbodiesDone` semantics, ai
 
 Fika analysis was done against 2.4.4. The mod targets Fika 2.4.x generally (2.4.6 is expected to behave the same); no Fika version gating exists in code.
 
-Identity: plugin name "Fuck These Physics", version 1.1.0, GUID `com.rootdarkarchon.fuckthesephysics`, output `BepInEx/plugins/FuckThesePhysics/FuckThesePhysics.dll`, package `FuckThesePhysics-1.1.0-SPT4.1.zip`. The disabled-collider extrusion skip (§12) uses the Harmony id `com.rootdarkarchon.fuckthesephysics.extrusionskip`.
+Identity: plugin name "Fuck These Physics", version 1.2.0, GUID `com.rootdarkarchon.fuckthesephysics`, output `BepInEx/plugins/FuckThesePhysics/FuckThesePhysics.dll`, package `FuckThesePhysics-1.2.0-SPT4.1.zip`. The disabled-collider extrusion skip (§12) uses the Harmony id `com.rootdarkarchon.fuckthesephysics.extrusionskip`; viewmodel interpolation (§13) uses `com.rootdarkarchon.fuckthesephysics.viewmodelinterp`.
 
 ### Configuration
 
@@ -39,6 +41,8 @@ Identity: plugin name "Fuck These Physics", version 1.1.0, GUID `com.rootdarkarc
 | `Debug / LogPhysicsGate` | bool | off | Advanced. See §8. |
 | `Report / Key` | `KeyboardShortcut` | unset | Advanced. Writes the registry and step timing report. See §8. |
 | `Debug / VerifyExtrusionSkip` | bool | off | Advanced. Runs vanilla for skipped calls and counts non-zero results in the report. No gain while on. See §12. |
+| `Viewmodel / InterpolateFixedTick` | bool | on | Live. Renders sway, recoil, breathing, bob and wall pullback between the 50 Hz ticks. Off restores vanilla from the next frame. Adds up to ~20 ms latency. See §13. |
+| `Debug / TraceViewmodelPose` | bool | off | Advanced. Records a 512-frame ring of per-frame viewmodel pose data for the local player and dumps it in the report. Patches only active while on. See §13 "Diagnostics: pose trace". |
 
 Advanced entries are hidden unless "Advanced settings" is enabled in Configuration Manager.
 
@@ -211,6 +215,7 @@ All read-only and independent of the fixes.
 - **`SimulateTimer.cs`** (part of the `Report / Key` report). Observation-only Harmony prefix/postfix pairs on `PhysicsExtensions.Simulation.Update`, `UnityEngine.Physics.Simulate(float)` and a prefix on `PhysicsExtensions.UpdateController.SimulationEnabled(bool)`. Per reporting window: call counts, total/max milliseconds, percentiles from a 4096-sample ring buffer, and the last 32 enable/disable transitions.
 - **Report.** `Report / Key` writes both sections to the BepInEx log and to `BepInEx/plugins/FuckThesePhysics/reports/`.
 - **Disabled-collider extrusion skip counters** (part of the `Report / Key` report). Since the last report: skipped calls, vanilla-verified calls, non-zero results and max magnitude in verify mode, and the last non-zero sample. Plain counters, reset on each report. See §12.
+- **Viewmodel interpolation counters** (part of the `Report / Key` report). Frames blended, tick snapshots, resets by reason, frames skipped (inactive), last alpha, and recoil swap active. See §13.
 - **Lifecycle log lines** (BepInEx logger, because EFT suppresses `Debug.Log`): crate `Init`, `Landed` (with release on/off), `release` (removed / remainingRegistry / simulationEnabled), `IsStatic`; and one line per BTR suspension release.
 
 ## 9. Who is affected
@@ -224,6 +229,8 @@ All read-only and independent of the fixes.
 Neither Fika nor Rupture patches `ServerAirDrop.ManualUpdate`, `ServerAirDrop.Init`, `PhysicsExtensions` or `VehicleSuspension`, so there are no Harmony conflicts among the targets. ORBIT's `AirdropLandedPatch` hooks `ClientAirDrop.PlayLandingSound`, a different method.
 
 Extrusion skip (§12) runs wherever the head extrusion runs for bots: offline, the Fika host and headless hosts. A Fika client's own player has an enabled collider, so nothing is skipped there, and remote players never run the extrusion there.
+
+Viewmodel interpolation (§13) runs only on the local first-person player (including while mounted or on a stationary weapon), on offline and Fika clients and host. It is not installed on Fika headless. Bots, observed players and remote players are not affected.
 
 ## 10. Rejected alternatives
 
@@ -254,6 +261,7 @@ Woods, Fika host, 2026-10-31, from `LogOutput.log`, for the airdrop and BTR fixe
 - Maps other than Woods.
 - Disabled-collider extrusion skip (§12): Fika clients (expected no-op: a client's own player has an enabled collider).
 - Release paths of the UNVERIFIED registrants listed in §2.
+- Viewmodel interpolation (§13): not run in game yet. Covers the temporal capture before/after, DLSS on/off, high and low frame rates, recoil, breath hold, weapon swaps, point of impact against the sight picture, and Fika client behaviour.
 
 ## 12. Disabled-collider extrusion skip (`src/FuckThesePhysics/DisabledExtrusionSkip.cs`)
 
@@ -304,7 +312,121 @@ The `Disabled-collider extrusion skip` section of `Report / Key` shows: setting 
 
 Verified in game by the user on 2026-11-04: the skip works and improves performance. No capture or report numbers were recorded in this repo.
 
-## 13. Research notes
+## 13. Viewmodel fixed-tick interpolation (`src/FuckThesePhysics/ViewmodelInterpolation.cs`)
+
+Status: implemented in 1.2.0. The tick stepping is **verified fixed in game** (pose trace, 2026-11-06, see "In-game results"). The remaining checks under "Validation" are still to run.
+
+Problem: `FirstPersonStrategy.ProcessEffectors` (and the `MountingStrategy` and `StationaryStrategy` equivalents, see "Strategies") runs EFT's whole 50 Hz effector layer `nFixedFrames` times per rendered frame, and `ApplyTransformations` writes the pose once. With no new tick the viewmodel freezes; with a tick burst it steps. Mechanism and evidence: `docs/viewmodel-fixed-tick-handoff.md` (CONFIRMED from decompiled Assembly-CSharp `cc2d80b0-6d5b-4cb1-a581-6d2cc901d4c7`, EFT 0.16.9.40743).
+
+### Approach
+
+- The simulation is unchanged. Effectors and springs run as before, with fixed dt and the tick counts `ForceEffector` depends on.
+- The mod records each output after every tick (`prev`, `cur`) and presents `lerp(prev, cur, alpha)` for the frame, with `alpha = clamp01((Time.time - Time.fixedTime) / Time.fixedDeltaTime)`. Component lerp, not slerp: the rotation values are small additive Euler offsets.
+- Rejected: running the effectors once per rendered frame with frame dt. That changes spring stability and makes the tick-counted `ForceEffector` frame-rate dependent.
+
+### Hooks
+
+| Target | Patch | Role |
+|---|---|---|
+| `FirstPersonStrategy`, `MountingStrategy`, `StationaryStrategy` `.ProcessEffectors(ProceduralWeaponAnimation, float, int)` | prefix (one shared method) | Safety-restore if still swapped. Decide `active` (feature on, tracked PWA is the local MainPlayer's, `PWA.PointOfView` is first person). Run identity checks and resets (strategy identity included). Arm the snapshot reference. |
+| `Spring.FixedUpdate` | postfix | Only when the instance is the armed `CameraPosition` spring (last statement of the tick loop): `prev = cur`, then read the swap set into `cur`. |
+| the three `ProcessEffectors` | postfix (one shared method) | Disarm. If active and two snapshots exist, write the blended values into the swap set. |
+| `ProceduralWeaponAnimation.LateTransformations` | postfix | If swapped, restore the true values and clear the flag. |
+
+Frame topology: `PWA.ProcessEffectors` (0600B830) runs the tick loop (`_strategy.ProcessEffectors`), `ApplyTransformations`, and then one camera apply. `PWA.LateTransformations` (0600B831) runs the camera apply instead when stance is left or blindfire. Exactly one camera apply happens per frame, so the blend covers both cases, and the restore sits in `LateTransformations`, which runs after both. For `MountingStrategy` and `StationaryStrategy` the camera work (`MountedWeaponCamera`, `StationaryCamera` + `LerpCamera`) is in `Strategy.LateTransformations`, which `PWA.LateTransformations` calls before the restore postfix runs, so it also reads the blended pose.
+
+### Strategies (CONFIRMED, EFT 0.16.9.40743)
+
+`IProceduralAnimationStrategy` (`02000764`) has exactly four implementors: `FirstPersonStrategy` (`02000765`), `ThirdPersonStrategy` (`02000766`), `StationaryStrategy` (`02000767`), `MountingStrategy` (`02000768`). Its only caller of `ProcessEffectors` (`06003F14`) is `PWA.ProcessEffectors` (0600B830).
+
+- `FirstPersonStrategy.ProcessEffectors` (`06003F1B`), `StationaryStrategy.ProcessEffectors` (`06003F2E`) and `MountingStrategy.ProcessEffectors` (`06003F3B`) have the same signature, the same guard and the same `deltaTime /= nFixedFrames` loop. Each tick runs `MotionReact`, `ForceReact`, `TurnAway.Process`, then `HandsPosition.FixedUpdate`, `HandsRotation.FixedUpdate`, `SwaySpring.Process`, `Shootingg.CurrentRecoilEffect.FixedUpdate`, `CameraRotation.FixedUpdate` and, as the last statement, `CameraPosition.FixedUpdate`. They differ only in which extra effectors run: `Breath`, `Walk` and `HandShake` in first person, `Breath` in mounting, none of them in stationary. The effectors that run write only springs, `HandRotationRecoil.Offset` and TurnAway, so the swap set is identical.
+- Their `Apply*` read the same state. `MountingStrategy.ApplyTransformations` (`06003F38`) is the first-person sequence. `StationaryStrategy.ApplyTransformations` (`06003F2F`) calls `PWA.ApplyStationaryWeaponPosition` (`0600B815`: `HandsPosition.Get()` plus `CurrentRecoilEffect.GetHandPositionRecoil()`) and `ApplyComplexRotation`. In `LateTransformations`, `PWA.MountedWeaponCamera` (`0600B823`) reads `CameraPosition`, `CameraRotation`, `HandsPosition`, `TurnAway.Position` and the recoil camera getters, and `PWA.StationaryCamera` (`0600B822`) reads `CameraPosition` and `CameraRotation`. Both strategies' `ApplyCameraTransformations` (`06003F36`, `06003F2D`) are empty, so `PWA.LateTransformations` adds no further camera apply.
+- The local player uses these strategies while mounted or on a stationary weapon: `IdleWeaponMountingState.Enter` (`0600B620`) calls the `MovementContext` method `06008B9D` (its name contains a Cyrillic `е`), which sets the persistent `_mountingStrategy` instance; `StationaryPlayerState.Spawned` (`06008C6F`) calls `MovementContext.SetStationaryStrategy` (`06008B9C`), which allocates a new `StationaryStrategy` each time. `IdleWeaponMountingState.Exit` leaves through `PWA.SetStrategy(EPointOfView)` (`0600B81E`), which allocates a new `FirstPersonStrategy`. Entering and leaving therefore always change the strategy reference, and the history resets.
+- `PWA.PointOfView` setter (`0600B7D6`) does not replace a `StationaryStrategy` or `MountingStrategy` (`!(_strategy is StationaryStrategy) && !(_strategy is MountingStrategy)`). Both strategies' camera code is guarded by `PointOfView == FirstPerson`, so the feature is only active in first person and the history restarts when the view leaves it.
+
+### Swap set
+
+- `Spring.Current` on `HandsPosition`, `HandsRotation`, `CameraRotation`, `CameraPosition`.
+- `BetterSpring._pPos` on `SwaySpring` (its `Value` is get-only).
+- Recoil, when `CurrentRecoilEffect` is `NewRecoilShotEffect`: `HandPositionRecoil` and `HandRotationRecoil` `.Current/.Offset`, `CameraRotationRecoil.Current`, and `WeaponRecoil.Values[i].Process._current`. Otherwise only springs and TurnAway are interpolated, and nothing throws.
+- TurnAway `_position`, `_rotation`, `_cameraShift`, `_lElbowShift` and `_rElbowShift` (public `Vector3` fields, `04003366`..`0400336A`). `TurnAway.Process` zeroes and rewrites all of them every tick; the elbow shifts are read through `LElbowShift`/`RElbowShift` (`06003F02`/`06003F03`) by `Player.AdjustElbows` (`0600816D`), between `PWA.ProcessEffectors` and `LateTransformations` in `VisualPass`, so they are inside the bracket.
+
+Completeness: every per-tick write that is read outside the tick loop lands in this set. Walk, Force, Motion, Breath and HandShake only feed spring accelerations, velocities or `HandRotationRecoil.Offset`, which is in the set. Evidence: `local://viewmodel-interp-trace-completeness.md`. Velocities, force accumulators, `_update`, `_pVel`, `NeedUpdate`, `Spring.Zero` and Transforms are never touched.
+
+Restore rule: `field = cur + (fieldNow - blendedWritten)`. This keeps writes made during `Apply*` (for example `LerpCamera` into `SwaySpring.ApplyVelocity`). Transforms keep the blended pose after restore; that is the presented pose.
+
+Partial writes: before the write, `blended` is initialised from the live field values, `swapped` is set, and each field write records its value into `blended` right after it. If a write throws partway, the failure path's restore is therefore exact: written fields go to `cur` plus their deltas, and unwritten fields, whose `fieldNow` equals their recorded value, go to `cur`.
+
+### Resets
+
+On a reset, `prev = cur` and history counts as one snapshot, so the next frame blends from a fresh pair. Resets fire on: tracked PWA ref change; strategy ref change (a new `FirstPersonStrategy` is allocated on each POV switch and on leaving a mount; entering a mount or stationary weapon swaps in the other strategy); HandsContainer ref change; CurrentRecoilEffect ref change; `WeaponRecoil.Values` ref or length change; `HandsController` ref change (weapon swap); `Player.Teleport` on MainPlayer; `Time.fixedDeltaTime` change; the point of view leaving first person; feature re-enabled.
+
+Not reset on aim toggles, hitches or `nFixedFrames` spikes. Snapshots are per tick, so `prev` and `cur` are always consecutive ticks. Aim blending lives in `Zero` and the aim weight, not in the swap set.
+
+### Ballistics and camera
+
+Shots read the fireport transform hierarchy (`FirearmController.Shot`: fireport position and direction). Nothing reads springs, so shots use the presented pose. Point of impact matches the sight picture; the gameplay pose is up to one tick (~20 ms) late. Camera and weapon use the same alpha in the same bracket, which keeps ADS sight alignment, since the ADS camera target derives from weapon transforms. [INFERENCE] until checked in game.
+
+### Scope
+
+- Local first-person `MainPlayer` only, with `FirstPersonStrategy`, `MountingStrategy` or `StationaryStrategy`. Bots and observed players (`ThirdPersonStrategy`, `NextObservedPlayer` with fixed `nFixedFrames = 2`) are untouched, as is the local player outside first person.
+- Fika host and client: works, client-local. Each client renders its own viewmodel.
+- Fika headless: not installed. The check is `BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey("com.fika.headless")`, and one info line is logged. The `VisualPass` patch in Fika headless is commented out, so headless does not replace `VisualPass`; install is skipped because nothing renders there.
+- Other installed mods (Fika 2.4.4, SAIN, ORBIT, Rupture) do not patch these targets, per the design source check.
+
+### Configuration
+
+`Viewmodel / InterpolateFixedTick` (bool, default on, category "6. Viewmodel", order 100, live). Off restores vanilla from the next frame. On adds up to one tick (~20 ms) of latency to sway, recoil, breathing, bob and wall pullback.
+
+### Report
+
+A "Viewmodel interpolation" section in the `Report / Key` report: frames blended, tick snapshots, resets by reason, frames skipped (inactive), last alpha, and whether the recoil swap is active. Counters are plain integers, reset on each report. The hot path does not allocate.
+
+### Install and failure
+
+- Install resolves every target (the three `ProcessEffectors` methods, `Spring.FixedUpdate`, `PWA.LateTransformations`, `Player.Teleport`, `GameWorld.Dispose`) by name and parameter types. A miss logs a warning with the full signature and patches nothing.
+- An exception in any patch is logged once, swapped state is restored if possible, and the feature latches to vanilla until the game restarts.
+
+### Diagnostics: pose trace (`src/FuckThesePhysics/ViewmodelPoseTrace.cs`)
+
+`Debug / TraceViewmodelPose` (bool, default off, category "3. Debug", order 70, advanced, live) finds where remaining viewmodel judder comes from by recording what each stage of the frame produced. It records with `InterpolateFixedTick` on or off and has its own Harmony id (`<guid>.viewmodelpose`) and failure latch. Its patches and a static `Camera.onPreCull` delegate exist only while the toggle is on (turning it on clears the buffer; turning it off keeps the rows for the report). One row per rendered frame goes into a preallocated 512-row ring buffer, and nothing is logged per frame. The row is written only while `GameWorld.MainPlayer`'s PWA is the tracked one.
+
+| Stage (in frame order) | Hook | Sampled |
+|---|---|---|
+| ticks | prefix on the three `ProcessEffectors(pwa, deltaTime, nFixedFrames)`, priority first, before the interpolation hooks | `nFixedFrames` for MainPlayer's PWA. A frame whose prefix did not run for MainPlayer is `skipped` (`tk` = -1). |
+| hands rotation, simulated | postfix on the same methods, ordered before the interpolation postfix | `HandsContainer.HandsRotation.Current` after the tick loop, before any blend |
+| hands rotation, presented | postfix on the same methods, ordered after the interpolation postfix | the same value after the blend (equals the simulated value when not blended) |
+| weapon root | postfix on `PWA.LateTransformations(float)`, ordered after the interpolation restore | `HandsContainer.WeaponRootAnim` `localPosition`/`localRotation`, the last PWA write of `VisualPass` (restore only writes effector fields, so this is the presented pose) |
+| fireport and camera | `Camera.onPreCull`, only for `CameraManager.Instance.Camera` (checked with `CameraManager.Exist` first) | latest point before the FPS camera renders: camera world position and rotation, and `HandsContainer.Fireport` in camera space (`InverseTransformPoint`, `inverse(camera rotation) * fireport rotation`). The row is committed here. A second pre-cull of the camera in the same frame overwrites the row. |
+
+Per row: frame, `dt` in ms, `tk`, `I` (interpolation setting on), `B` (blended this frame) and `alpha` (-1 when not blended), then |delta vs the previous frame's row| for: hands rotation simulated and presented (raw `Spring.Current` units), weapon root position (mm) and rotation (deg), fireport position (mm) and rotation (deg) in camera space, camera position (mm) and rotation (deg). A delta is `-` unless the previous row is the previous frame and has the data. Rotation deltas use the vector part of `inverse(a) * b`, which is exact for tiny angles.
+
+The "Viewmodel pose trace" report section starts with a summary (frames in the buffer, frames with 0 ticks, frames with ticks, skipped frames, interpolation setting on, blended frames), then per metric the median non-zero |delta| and the number of stall frames (|delta| below 1% of that median) out of the valid frames, split into 0 ticks / ticks > 0 / skipped, then the 512-row fixed-width table, oldest first. Reading it: if the fireport-in-camera-space stalls line up with 0-tick frames while the interpolation setting is on, the presented pose is still stepping; if camera-space stalls are absent but the judder remains, it is outside the pose (frame pacing, DLSS, `dt` spikes). Camera world deltas show whether the camera itself steps.
+
+Verified against EFT 0.16.9.40743 (`Assembly-CSharp` MVID `cc2d80b0...`): `PlayerSpring.WeaponRootAnim` (`04009382`), `PlayerSpring.Fireport` (`04009386`, written in `PWA.InitTransforms`, read by `GetWorldCalibrationPoint`), `CameraManager.Instance` (`17002657`, lazily creates), `CameraManager.Exist` (`17002658`), `CameraManager.Camera` (`17002662`), `Player.VisualPass` (`0600813A`: `ProcessEffectors`, then IK/animation passes, then `LateTransformations`); `UnityEngine.Camera.onPreCull` from `UnityEngine.CoreModule`.
+
+### In-game results (2026-11-06, Woods, about 110 fps, 49.6 Hz ticks)
+
+Pose trace, 512 frames each, aiming with light sway, camera still; about 45% of frames had 0 ticks. Rotation of the fireport in FPS-camera space:
+
+| | Interpolation off | Interpolation on |
+|---|---|---|
+| Frozen on 0-tick frames | 230/230 | 0/233 |
+| Mean delta, 0-tick / tick frames | 0 / 0.0046° | 0.00159° / 0.00158° |
+| Median ratio of consecutive per-frame speeds | stepped | 1.02 |
+
+**Residual swim is not tick-related (user-confirmed: it changes with map position).** At the test spot (x ≈ 507 m) the float32 step is 0.0305 mm. The camera's world-position deltas while still came out as 0, about 0.02 mm, or 0.041–0.051 mm (about √2 × 0.0305 mm, one rounding step on x and z). The fireport position in camera space jitters (median speed ratio 2.7) while its rotation is smooth. A 120 fps video of the same spot showed the eyepiece rim and the rear aperture jittering by 0.1–1.7 px per frame, mostly at 15–50 Hz with alternating sign, against a background that moved ≤ 0.002 px. The same happens with interpolation, DLSS and TAA on or off. [INFERENCE] World-space float32 precision at large coordinates (CPU transform hierarchy and world-space GPU transforms): sub-0.03 mm relative wobble is 0.5–1 px on parts a few centimetres from the eye. Out of scope for this feature; a fix would need a floating origin or camera-relative rendering.
+
+### Validation (remaining)
+
+From `docs/viewmodel-fixed-tick-handoff.md`:
+
+- FuckTheseFX temporal capture (16 frames, aiming with light sway), then `python scripts/Analyze-TemporalCapture.py <folder>`. Before: `stallThenJump`/`zigzag` events in the `Viewmodel pose` section. After: the weapon moves every frame, with a smooth delta series.
+- DLSS on and off; high and low frame rates (below 50 fps too); recoil; breath hold; weapon swap; point of impact against the sight picture.
+- Mounting on a bipod or wall and using a stationary weapon (enter, aim, fire, leave), and switching to third person while mounted; wall pullback with elbows visible (`_lElbowShift`/`_rElbowShift`).
+- Fika client: confirm client-local behaviour.
+
+## 14. Research notes
 
 `docs/research/` holds the analysis done before implementation. These files predate the implementation and were written under the old working name "SPT-FuckThisAirdrop"; names, GUIDs and the recommended release point (`IsStatic`) in them are historical. Where they disagree with this document, this document wins.
 

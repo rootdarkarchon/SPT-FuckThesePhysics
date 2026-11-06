@@ -13,7 +13,10 @@ namespace FuckThesePhysics
     // (PhysicsExtensions.UpdateController._rigidbodies), so they stop holding the script-driven physics step open: this
     // writes physics registry state (see AirdropRelease, BtrSuspensionRelease). It also skips the per-call head extrusion of
     // players whose head collider is disabled (see DisabledExtrusionSkip).
+    // Finally, it interpolates EFT's 50 Hz first-person effector layer (springs, sway, recoil, breath, bob, wall pullback) between
+    // fixed ticks for the local player (see ViewmodelInterpolation); that is skipped on Fika headless, which has no viewmodel.
     // Diagnostics: physics gate log, F9 registry/timing report and an opt-in airdrop spawn key.
+    [BepInDependency("com.fika.headless", BepInDependency.DependencyFlags.SoftDependency)]
     [BepInPlugin(PluginInfo.Guid, PluginInfo.Name, PluginInfo.Version)]
     public sealed class Plugin : BaseUnityPlugin
     {
@@ -23,7 +26,9 @@ namespace FuckThesePhysics
         ConfigEntry<KeyboardShortcut> spawnKey;
         ConfigEntry<bool> logGate;
         ConfigEntry<bool> skipExtrusion;
+        ConfigEntry<bool> interpolateViewmodel;
         ConfigEntry<bool> verifyExtrusion;
+        ConfigEntry<bool> traceViewmodelPose;
         ConfigEntry<KeyboardShortcut> reportKey;
         string reportDirectory;
 
@@ -59,6 +64,12 @@ namespace FuckThesePhysics
             verifyExtrusion = Config.Bind("Debug", "VerifyExtrusionSkip", false,
                 Describe("3. Debug", "Verify extrusion skip", 80,
                     "Run vanilla for the calls that would be skipped and count how many return a non-zero depenetration in the report (Report / Key). Only acts while Movement / SkipDisabledHeadExtrusion is on. There is no performance gain while this is on.", true));
+            traceViewmodelPose = Config.Bind("Debug", "TraceViewmodelPose", false,
+                Describe("3. Debug", "Trace viewmodel pose", 70,
+                    "Record one row per rendered frame (the last 512) for the local player: ticks run, simulated and presented hand rotation, weapon root, fireport and camera motion, then write them as a table with stall statistics in the Report / Key output (section \"Viewmodel pose trace\"). Works with or without Viewmodel / InterpolateFixedTick. Patches are only active while this is on; nothing is logged per frame.", true));
+            interpolateViewmodel = Config.Bind("Viewmodel", "InterpolateFixedTick", true,
+                Describe("6. Viewmodel", "Interpolate fixed-tick weapon motion", 100,
+                    "Render the weapon, hands and camera sway, recoil, breathing, walking bob and wall pullback between EFT's 50 Hz ticks instead of in steps, which removes the viewmodel judder at frame rates above 50 fps. Adds up to one tick (about 20 ms) of latency to these effects, and shots follow the displayed weapon pose. Only affects the local player. Applies live; turning it off restores vanilla behaviour from the next frame."));
             reportDirectory = Path.Combine(Path.GetDirectoryName(Info.Location) ?? BepInEx.Paths.PluginPath, "reports");
             try { SimulateTimer.Install(PluginInfo.Guid); }
             catch (Exception error) { Log.LogWarning("Physics step timer unavailable: " + error.Message); }
@@ -68,6 +79,17 @@ namespace FuckThesePhysics
             catch (Exception error) { Log.LogWarning("BTR suspension release unavailable: " + error.Message); }
             try { DisabledExtrusionSkip.Install(PluginInfo.Guid + ".extrusionskip", skipExtrusion, verifyExtrusion); }
             catch (Exception error) { Log.LogWarning("Disabled-collider extrusion skip unavailable: " + error.Message); }
+            // Soft dependency on Fika headless (declared above) makes sure its plugin is already registered here.
+            if (BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey("com.fika.headless"))
+                Log.LogInfo("Viewmodel interpolation skipped: Fika headless has no first-person viewmodel.");
+            else
+            {
+                const string interpolationId = PluginInfo.Guid + ".viewmodelinterp";
+                try { ViewmodelInterpolation.Install(interpolationId, interpolateViewmodel); }
+                catch (Exception error) { Log.LogWarning("Viewmodel interpolation unavailable: " + error.Message); }
+                try { ViewmodelPoseTrace.Install(PluginInfo.Guid + ".viewmodelpose", interpolationId, traceViewmodelPose); }
+                catch (Exception error) { Log.LogWarning("Viewmodel pose trace unavailable: " + error.Message); }
+            }
             Log.LogInfo(PluginInfo.Name + " " + PluginInfo.Version + " ready.");
         }
 
@@ -80,6 +102,8 @@ namespace FuckThesePhysics
 
         void OnDestroy()
         {
+            ViewmodelPoseTrace.Uninstall();
+            ViewmodelInterpolation.Uninstall();
             DisabledExtrusionSkip.Uninstall();
             BtrSuspensionRelease.Uninstall();
             AirdropRelease.Uninstall();
@@ -96,6 +120,8 @@ namespace FuckThesePhysics
             Section(report, "Physics step timing", SimulateTimer.Write);
             Section(report, "What keeps the physics step running", SimulationOwners.Write);
             Section(report, "Disabled-collider extrusion skip", DisabledExtrusionSkip.Write);
+            Section(report, "Viewmodel interpolation", ViewmodelInterpolation.Write);
+            Section(report, "Viewmodel pose trace", ViewmodelPoseTrace.Write);
             string text = report.ToString();
             Log.LogInfo(text);
             try
