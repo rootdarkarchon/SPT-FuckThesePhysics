@@ -25,7 +25,7 @@ nothing. The game then behaves as vanilla.
 ## Installation
 
 1. Close the game.
-2. Extract `FuckThesePhysics-1.2.0-SPT4.1.zip` into your SPT game folder. The
+2. Extract `FuckThesePhysics-1.3.0-SPT4.1.zip` into your SPT game folder. The
    plugin ends up at `BepInEx/plugins/FuckThesePhysics/FuckThesePhysics.dll`.
 3. Start the game.
 
@@ -43,6 +43,7 @@ folder. You can also delete
   when the BTR drives off, so physics still runs while the BTR is moving.
 - **Movement collision.** The game disables the head collider of every bot. Its head-collision query then runs against empty bounds near the world origin, which is wasted work. The mod skips that query for disabled player colliders and returns zero instead, which is what the game's query yields for them. Set `Movement / SkipDisabledHeadExtrusion` off to run the game's query again. See [Fika](#fika) for who benefits.
 - **Viewmodel.** The first-person weapon, hands and camera follow EFT's sway, recoil, breathing and bob between the game's 50 Hz ticks, instead of jumping at each tick. This includes the mounted (bipod, wall) and stationary-weapon views. The simulation itself is unchanged. The mod only changes how the local view is drawn between ticks. Set `Viewmodel / InterpolateFixedTick` off to return to the game's behaviour.
+- **Tripwires.** Planted tripwires (placed by the Partisan boss) no longer keep the physics step running for the whole raid. The mod checks players' and bots' walk-ins against each armed wire itself and calls the game's own trigger handling. Doors and other animated non-player colliders no longer trip them unless the step runs for another reason. Set `Tripwire / ReleaseIdleTripwires` off to return to the game's behaviour.
 
 Looting, collision and bullet hits on crates keep working. The crate stays solid
 and hittable, and you can open it as usual. The mod does not move, hide or
@@ -61,6 +62,7 @@ it, and it turns off again when none are left.
   machine, including clients. Install the mod on the host and on every client.
   Installing it on a client is harmless for airdrops.
 - **Movement collision:** bots run on the host (or on a headless host), so the skip matters there, and offline play gets the same. A Fika client runs the query only for its own player, whose collider is enabled, so the skip does nothing on clients.
+- **Tripwires:** the wires are placed by the Partisan boss, so in Fika this is the host. Walk-in detection stays host-authoritative, as in vanilla. Clients also stop holding the physics step for planted wires, because they run the same release. Not tested on Fika yet.
 - **Viewmodel interpolation:** client-local. Each machine that renders the first-person view (offline, the Fika host, and each client that installs the mod) interpolates its own weapon and camera. It is not installed on Fika headless, which renders nothing. Other players are not affected.
 
 ## Settings
@@ -72,6 +74,7 @@ Settings are available in BepInEx Configuration Manager and in
 |---|---|---|
 | `Airdrop / ReleaseLandedAirdrops` | on | Unregisters a crate from the physics registry when it lands. Applies live; when off, crates that land afterwards behave as vanilla. Host and offline only. |
 | `BTR / ReleaseParkedSuspension` | on | Unregisters the BTR suspension body each time the BTR stops. Applies from the next BTR stop; when off, the BTR behaves as vanilla. Runs on every machine, including Fika clients. |
+| `Tripwire / ReleaseIdleTripwires` | on | Stops planted tripwires from keeping the physics step on; the mod checks walk-ins itself. Applies live; when off, armed wires behave as vanilla. Runs on every machine, including Fika clients. |
 | `Movement / SkipDisabledHeadExtrusion` | on | Skips the head-collision query for disabled player colliders (the bots'), whose result is zero anyway. Applies live; when off, the game's query runs. See [Fika](#fika). |
 | `Viewmodel / InterpolateFixedTick` | on | Shows the first-person weapon, hands and camera sway between the game's 50 Hz ticks instead of in steps. Adds up to about 20 ms of latency to those effects. Applies live; when off, the game's behaviour returns from the next frame. Local player only. |
 
@@ -84,7 +87,7 @@ the `.cfg` file.
 | Setting | Default | Effect |
 |---|---|---|
 | `Debug / SpawnAirdropKey` | unset | Calls in a real airdrop (plane, parachute, landing) at the drop point nearest to you. |
-| `Debug / LogPhysicsGate` | off | Logs each time the physics step turns on or off, together with the number of registered rigidbodies. Only changes are logged. |
+| `Debug / LogPhysicsGate` | off | Logs each time the physics step turns on or off, together with the number of registered rigidbodies. Only changes are logged. Also logs tripwire walk-ins and skipped tripwire relay calls. |
 | `Report / Key` | unset | Writes a report of the physics registry and step timing to the BepInEx log and to `BepInEx/plugins/FuckThesePhysics/reports/`. |
 | `Debug / VerifyExtrusionSkip` | off | Runs the game's query for the calls that would be skipped and counts non-zero results in the report. Only acts while `Movement / SkipDisabledHeadExtrusion` is on. No performance gain while on. |
 
@@ -111,7 +114,8 @@ each BTR suspension release.
   entries accumulated. The following have not been tested: turning the setting
   off to reproduce the leak, grenades, ragdolls and Fika clients.
 - The disabled-collider skip was verified in game (works, improves performance). Fika clients were not tested; nothing is skipped there because a client's own player has an enabled collider. If the skip path throws an error, it switches itself off until the game restarts.
-- Viewmodel interpolation (`Viewmodel / InterpolateFixedTick`, version 1.2.0) was verified in game: it removes the 50 Hz stop-and-go of weapon sway. Other conditions (low frame rates, firing, weapon swaps, mounting, Fika clients) are not tested yet. Shots follow the weapon pose on screen, which can be up to about 20 ms behind the game's internal pose. A fine left/right swim of near parts of the weapon (eyepiece rim, rear of the weapon) far from the map origin remains, with or without this setting. It comes from float precision in world coordinates, which this mod does not change.
+- Viewmodel interpolation (`Viewmodel / InterpolateFixedTick`, version 1.2.0) was verified in game: it removes the 50 Hz stop-and-go of weapon sway. Other conditions (low frame rates, firing, weapon swaps, mounting, Fika clients) are not tested yet. Shots follow the weapon pose on screen, which can be up to about 20 ms behind the game's internal pose. A fine left/right swim of near parts of the weapon (eyepiece rim, rear of the weapon) far from the map origin remains, with or without this setting. It comes from float precision in world coordinates, which this mod does not change; that is handled by the separate SPT-FuckTheseOptics mod.
+- Tripwires (`Tripwire / ReleaseIdleTripwires`) are not tested in game. The mod detects walk-ins itself every frame, for players and bots only. Doors and other animated non-player colliders no longer trip planted wires unless the physics step runs for another reason. Fika clients are untested.
 
 ## Building from source
 

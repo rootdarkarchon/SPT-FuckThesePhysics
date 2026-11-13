@@ -3,7 +3,7 @@
     <FtpPluginGuid>com.rootdarkarchon.fuckthesephysics</FtpPluginGuid>
     <FtpPluginName>Fuck These Physics</FtpPluginName>
     <FtpSptLabel>SPT4.1</FtpSptLabel>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <Authors>rootdarkarchon</Authors>
     <Company>$(Authors)</Company>
     <Product>$(FtpPluginName)</Product>

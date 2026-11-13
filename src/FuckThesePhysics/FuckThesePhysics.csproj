@@ -16,6 +16,7 @@
     <Compile Include="ConfigurationManagerAttributes.cs"/>
     <Compile Include="AirdropRelease.cs"/>
     <Compile Include="BtrSuspensionRelease.cs"/>
+    <Compile Include="TripwireRelease.cs"/>
     <Compile Include="AirdropSpawner.cs"/>
     <Compile Include="GateLog.cs"/>
     <Compile Include="DisabledExtrusionSkip.cs"/>

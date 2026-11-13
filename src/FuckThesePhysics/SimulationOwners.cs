@@ -28,6 +28,7 @@ namespace FuckThesePhysics
             public string Colliders = "";
             public string Visibility = "";
             public List<string> Owners = new List<string>();
+            public string Tripwire;
             public string Error;
         }
 
@@ -132,6 +133,7 @@ namespace FuckThesePhysics
                 row.Visibility = VisibilityText(data, out bool visibleOrAbsent);
                 row.Counts = row.Active && visibleOrAbsent;
                 CollectOwners(go, row.Owners);
+                row.Tripwire = TripwireRelease.DescribeEntry(go);
             }
             catch (Exception error)
             {
@@ -309,6 +311,7 @@ namespace FuckThesePhysics
                 .Append(" colliders=").Append(row.Colliders)
                 .Append(" | ").Append(row.Visibility)
                 .Append(" | owners=").Append(row.Owners.Count == 0 ? "<none>" : string.Join(", ", row.Owners));
+            if (row.Tripwire != null) sb.Append(" | ").Append(row.Tripwire);
             if (row.Error != null) sb.Append(" | inspect error: ").Append(row.Error);
             sb.AppendLine();
         }

@@ -1,21 +1,24 @@
 # Fuck These Physics: design
 
-Developer-facing description of what v1.2.0 does, why, and how it was checked. User-facing documentation is in `README.md`.
+Developer-facing description of what v1.3.0 does, why, and how it was checked. User-facing documentation is in `README.md`.
 
 Tags used where the status still matters: **CONFIRMED** = read in decompiled code, prefab data or the in-game log. **[INFERENCE]** = reasoned, not observed. **UNVERIFIED** = not checked.
 
 ## 1. Purpose and target
 
-EFT runs its physics step (`Physics.Simulate`) from script and only when something is registered for it. Two things register a rigidbody and never unregister it, so the step runs every frame for the rest of the raid for no reason:
+EFT runs its physics step (`Physics.Simulate`) from script and only when something is registered for it. Three things register a rigidbody and never unregister it, so the step runs every frame for the rest of the raid for no reason:
 
 - the landed airdrop crate (offline and Fika host);
 - the BTR suspension body (Woods; every machine that renders the BTR).
+- planted tripwires (placed by the Partisan boss; see §14).
 
-This mod unregisters those two bodies at the point where the game itself no longer needs them. It uses EFT's own `UnsupportRigidbody`; it changes nothing else about physics. The cost of the step is established from earlier raid measurements (it is why Rupture moved ragdolls to an external PhysX world); this project does not re-measure it.
+This mod unregisters the airdrop and BTR bodies at the point where the game itself no longer needs them, and stops planted tripwires from registering at all (§14). It uses EFT's own `UnsupportRigidbody`; it changes nothing else about physics.
 
 A second feature skips the head-collision query for disabled player colliders, which are the bots' head colliders. It does not touch physics registration. It changes how one overlap query is computed, to cut main-thread time (§12). Its runtime verification is not yet done.
 
 A third feature (§13, version 1.2.0) interpolates the local first-person weapon, hands and camera between EFT's 50 Hz effector ticks. It targets viewmodel judder above the tick rate. It changes the presentation of the effector layer, not the simulation; its runtime verification is not yet done.
+
+A fourth feature (§14) stops planted tripwires from registering with the physics step. The mod detects walk-ins itself, every frame, and hands them to the game's own trigger handling. Its runtime verification is not yet done.
 
 Non-goals: changing EFT's physics driver or `CheckRigidbodiesDone` semantics, airdrop scheduling or loot, per-map drop-point coverage, replacing the penetration computation, and batching the character controller's neighbour queries (research §3.3, not implemented).
 
@@ -28,7 +31,7 @@ Non-goals: changing EFT's physics driver or `CheckRigidbodiesDone` semantics, ai
 
 Fika analysis was done against 2.4.4. The mod targets Fika 2.4.x generally (2.4.6 is expected to behave the same); no Fika version gating exists in code.
 
-Identity: plugin name "Fuck These Physics", version 1.2.0, GUID `com.rootdarkarchon.fuckthesephysics`, output `BepInEx/plugins/FuckThesePhysics/FuckThesePhysics.dll`, package `FuckThesePhysics-1.2.0-SPT4.1.zip`. The disabled-collider extrusion skip (§12) uses the Harmony id `com.rootdarkarchon.fuckthesephysics.extrusionskip`; viewmodel interpolation (§13) uses `com.rootdarkarchon.fuckthesephysics.viewmodelinterp`.
+Identity: plugin name "Fuck These Physics", version 1.3.0, GUID `com.rootdarkarchon.fuckthesephysics`, output `BepInEx/plugins/FuckThesePhysics/FuckThesePhysics.dll`, package `FuckThesePhysics-1.3.0-SPT4.1.zip`. The disabled-collider extrusion skip (§12) uses the Harmony id `com.rootdarkarchon.fuckthesephysics.extrusionskip`; viewmodel interpolation (§13) uses `com.rootdarkarchon.fuckthesephysics.viewmodelinterp`; the tripwire release (§14) uses the shared id `com.rootdarkarchon.fuckthesephysics`.
 
 ### Configuration
 
@@ -36,6 +39,7 @@ Identity: plugin name "Fuck These Physics", version 1.2.0, GUID `com.rootdarkarc
 |---|---|---|---|
 | `Airdrop / ReleaseLandedAirdrops` | bool | on | Live. Read on every `ManualUpdate` postfix; off restores vanilla for crates that land afterwards. |
 | `BTR / ReleaseParkedSuspension` | bool | on | Applies from the next BTR stop. |
+| `Tripwire / ReleaseIdleTripwires` | bool | on | Live. Planted tripwires are not kept in the physics registry; the mod checks walk-ins itself. Off re-registers armed wires and restores vanilla. See §14. |
 | `Movement / SkipDisabledHeadExtrusion` | bool | on | Live. Off restores the vanilla head-collision query for disabled colliders from the next frame. See §12. |
 | `Debug / SpawnAirdropKey` | `KeyboardShortcut` | unset | Advanced. Polled in `Plugin.Update`. |
 | `Debug / LogPhysicsGate` | bool | off | Advanced. See §8. |
@@ -43,6 +47,8 @@ Identity: plugin name "Fuck These Physics", version 1.2.0, GUID `com.rootdarkarc
 | `Debug / VerifyExtrusionSkip` | bool | off | Advanced. Runs vanilla for skipped calls and counts non-zero results in the report. No gain while on. See §12. |
 | `Viewmodel / InterpolateFixedTick` | bool | on | Live. Renders sway, recoil, breathing, bob and wall pullback between the 50 Hz ticks. Off restores vanilla from the next frame. Adds up to ~20 ms latency. See §13. |
 | `Debug / TraceViewmodelPose` | bool | off | Advanced. Records a 512-frame ring of per-frame viewmodel pose data for the local player and dumps it in the report. Patches only active while on. See §13 "Diagnostics: pose trace". |
+
+Camera-relative viewmodel rendering, precise pose math and the render probe moved to SPT-FuckTheseOptics (2026-11-06). Both mods can be installed together: they patch ProceduralWeaponAnimation-related methods under distinct Harmony ids and share no code.
 
 Advanced entries are hidden unless "Advanced settings" is enabled in Configuration Manager.
 
@@ -71,7 +77,7 @@ Advanced entries are hidden unless "Advanced settings" is enabled in Configurati
 - No installed mod changes `simulationMode`, `autoSimulation` or `autoSyncTransforms`; Rupture only observes `Physics.Simulate`.
 - With nothing registered the step is off. That is EFT's designed default.
 
-**Other registrants.** Full census in `docs/research/gate-holders.md`. Transient ones release on their own: loot drops (up to 15 s), corpse ragdolls (up to about 16 s), grenades (until they explode), lamps (up to 30 s, only after an explosion), broken doors (up to 6 s), `WheelDrive` (about 3 s). Persistent ones: the airdrop crate, the BTR suspension, player-placed tripwires while one exists, and the MG belt while visible and switched on. Release paths of smoke grenades, `FlareCartridge`, `GrenadeCartridge`, `BeltDetachablePart` and `SmallPhysicsObject` with `TimeOfLife == 0` are UNVERIFIED; they only matter as competing holders.
+**Other registrants.** Full census in `docs/research/gate-holders.md`. Transient ones release on their own: loot drops (up to 15 s), corpse ragdolls (up to about 16 s), grenades (until they explode), lamps (up to 30 s, only after an explosion), broken doors (up to 6 s), `WheelDrive` (about 3 s). Persistent ones: the airdrop crate, the BTR suspension, planted tripwires while armed (Partisan-placed; released by §14), and the MG belt while visible and switched on. Release paths of smoke grenades, `FlareCartridge`, `GrenadeCartridge`, `BeltDetachablePart` and `SmallPhysicsObject` with `TimeOfLife == 0` are UNVERIFIED; they only matter as competing holders.
 
 ## 3. Airdrop leak and why release at `Landed` is safe
 
@@ -232,6 +238,8 @@ Extrusion skip (§12) runs wherever the head extrusion runs for bots: offline, t
 
 Viewmodel interpolation (§13) runs only on the local first-person player (including while mounted or on a stationary weapon), on offline and Fika clients and host. It is not installed on Fika headless. Bots, observed players and remote players are not affected.
 
+Tripwire release (§14) runs on every machine where wires exist. Wires are placed by the Partisan boss, so on Fika that is the host. On clients the detector also runs, and `CollisionEnter` reaches the same empty `TriggerTripwire` override as vanilla. Walk-in authority on the host is unchanged.
+
 ## 10. Rejected alternatives
 
 - **Patch `CheckRigidbodiesDone` to ignore kinematic bodies.** Changes the gate for every registrant (global blast radius).
@@ -262,6 +270,7 @@ Woods, Fika host, 2026-10-31, from `LogOutput.log`, for the airdrop and BTR fixe
 - Disabled-collider extrusion skip (§12): Fika clients (expected no-op: a client's own player has an enabled collider).
 - Release paths of the UNVERIFIED registrants listed in §2.
 - Viewmodel interpolation (§13): not run in game yet. Covers the temporal capture before/after, DLSS on/off, high and low frame rates, recoil, breath hold, weapon swaps, point of impact against the sight picture, and Fika client behaviour.
+- Tripwire release (§14): not run in game. Covers: a report with Partisan wires shows no `tripwire(Clone)` entries and Simulate near transient-holder levels; walking between the stakes trips a wire once; walking up to a stake and disarming does not trip it; a bot's ignore rate matches `CHANCE_TO_IGNORE_TRIPWIRE`; shooting trips a wire; an inert wire does not fire; no double trigger when a corpse holds the step during a crossing; the accepted door divergence (§14); Fika client behaviour.
 
 ## 12. Disabled-collider extrusion skip (`src/FuckThesePhysics/DisabledExtrusionSkip.cs`)
 
@@ -376,7 +385,7 @@ Shots read the fireport transform hierarchy (`FirearmController.Shot`: fireport 
 
 ### Configuration
 
-`Viewmodel / InterpolateFixedTick` (bool, default on, category "6. Viewmodel", order 100, live). Off restores vanilla from the next frame. On adds up to one tick (~20 ms) of latency to sway, recoil, breathing, bob and wall pullback.
+`Viewmodel / InterpolateFixedTick` (bool, default on, category "6. Viewmodel", order 100, live). Off restores vanilla from the next frame. On adds up to one tick (~20 ms) of latency to sway, recoil, breathing, bob and wall pullback. SPT-FuckTheseOptics' temporal capture reads this entry read-only, by plugin GUID `com.rootdarkarchon.fuckthesephysics` and section/key `Viewmodel` / `InterpolateFixedTick`, and records it in `capture.json`; the section and key must not be renamed.
 
 ### Report
 
@@ -415,7 +424,7 @@ Pose trace, 512 frames each, aiming with light sway, camera still; about 45% of 
 | Mean delta, 0-tick / tick frames | 0 / 0.0046° | 0.00159° / 0.00158° |
 | Median ratio of consecutive per-frame speeds | stepped | 1.02 |
 
-**Residual swim is not tick-related (user-confirmed: it changes with map position).** At the test spot (x ≈ 507 m) the float32 step is 0.0305 mm. The camera's world-position deltas while still came out as 0, about 0.02 mm, or 0.041–0.051 mm (about √2 × 0.0305 mm, one rounding step on x and z). The fireport position in camera space jitters (median speed ratio 2.7) while its rotation is smooth. A 120 fps video of the same spot showed the eyepiece rim and the rear aperture jittering by 0.1–1.7 px per frame, mostly at 15–50 Hz with alternating sign, against a background that moved ≤ 0.002 px. The same happens with interpolation, DLSS and TAA on or off. [INFERENCE] World-space float32 precision at large coordinates (CPU transform hierarchy and world-space GPU transforms): sub-0.03 mm relative wobble is 0.5–1 px on parts a few centimetres from the eye. Out of scope for this feature; a fix would need a floating origin or camera-relative rendering.
+**Residual swim is not tick-related (user-confirmed: it changes with map position).** At the test spot (x ≈ 507 m) the interpolation setting does not remove a fine swim of near parts of the weapon (eyepiece rim, rear of the weapon). It is caused by float32 precision at large world coordinates, which this mod does not change and which is out of scope here; it is handled by SPT-FuckTheseOptics.
 
 ### Validation (remaining)
 
@@ -426,7 +435,57 @@ From `docs/viewmodel-fixed-tick-handoff.md`:
 - Mounting on a bipod or wall and using a stationary weapon (enter, aim, fire, leave), and switching to third person while mounted; wall pullback with elbows visible (`_lElbowShift`/`_rElbowShift`).
 - Fika client: confirm client-local behaviour.
 
-## 14. Research notes
+## 14. Tripwire release (`src/FuckThesePhysics/TripwireRelease.cs`)
+
+Status: implemented (`Tripwire / ReleaseIdleTripwires`, on by default). **Not yet verified in game.** The investigation, measurements and rules are in `docs/research/tripwire-gate.md` §8–§9. This section records what the code does.
+
+Problem: planted tripwires (the Partisan boss plants them, `tripwire-gate.md` §8.4) register their sync rigidbody in `BaseTripwire.Init` and stay registered while armed, triggered or disarmed. While any wire exists, the physics step runs for the rest of the raid. Measured on Customs (CONFIRMED, FTP report): 26 `tripwire(Clone)` entries, Simulate on 69.9% of frames.
+
+Approach: wires never register. Each frame the mod tests every player and bot capsule geometrically against each armed wire. On an enter edge it calls vanilla `BaseTripwire.CollisionEnter(collider)`, so the filter, the bot ignore roll and `TriggerTripwire` stay vanilla. Everything else that can enter a wire keeps using vanilla's relay, which needs the step to run for its own registrant (loot, grenades, ragdolls).
+
+### Hooks
+
+| Target | Patch | Role |
+|---|---|---|
+| `BaseTripwire.Init(int, Vector3, Vector3)` | postfix | Track the wire. Remove its registry entries (count, then `UnsupportRigidbody` that many times). |
+| `BaseTripwire.ReturnToPool()` | prefix | Untrack. |
+| `PhysicsExtensions.Simulation.Update()` | prefix | Per-frame detector: player and bot capsules against armed wires; calls `CollisionEnter` on enter edges. |
+| `SyncObjectCollisionChecker.OnTriggerEnter(Collider)` | prefix (skips the original) | For a tracked wire and a player or bot collider, skip vanilla. Single owner of walk-in detection. |
+| `GameWorld.Dispose()` | postfix | Clear tracking. |
+
+### Rules
+
+- Armed = `_collisionCollider.gameObject.activeInHierarchy`. Hidden wires (Active, Exploding, Exploded, Inert) are skipped, so one wire is never driven twice.
+- Geometry: the trigger volume is vanilla's capsule (radius 0.03 × scale, stake pivot to stake pivot). Player and bot capsules come from their `CharacterController` collider. Overlap is segment-to-segment distance against the sum of radii. Fast movers are swept.
+- Enter edges: `CollisionEnter` is called only when a collider joins a wire's inside set. Leaving needs 1 cm of hysteresis, so standing on a wire does not re-roll `CHANCE_TO_IGNORE_TRIPWIRE`.
+- Setting off (live): every tracked armed wire is re-registered, the relay skip stops and the sets are cleared. Wires armed afterwards behave as vanilla.
+
+### Gameplay contract
+
+Crossing between the stakes trips a wire for players and bots, with the bot ignore roll. Shooting still trips it. Disarming goes through `TripwireInteractionTrigger` and `DeActivateTripwire`, not physics; the disarmed wire is no longer tested.
+
+### Accepted divergence
+
+Decided by the user on 2026-11-13: non-player colliders that move without their own registry entry (a door swinging through a doorway wire, other animated scene colliders) no longer trip wires unless something else runs the physics step. Not checked or compensated.
+
+### Failure behaviour
+
+- Install resolves every target by name and parameter types, all or nothing. A miss logs a warning and rolls back the patches this feature made.
+- A detector exception sets a fault flag: every wire goes back to vanilla (re-registered, relay skip stopped, no new tracking) until the game restarts.
+- An exception in a single `CollisionEnter` call is logged once; nothing is disabled.
+- Harmony id: `PluginInfo.Guid` (shared, no suffix).
+
+Implementation deviations from the spec are listed in `docs/research/tripwire-gate.md` §9 "Implementation notes".
+
+### Configuration
+
+`Tripwire / ReleaseIdleTripwires` (bool, default on, category "3. Tripwire", live). Walk-in and skipped-relay debug lines go behind `Debug / LogPhysicsGate`. The report's SimulationOwners rows show each wire's state and release status (`release=untracked|held|vanilla`).
+
+### Verification
+
+Not run in game. The checks are listed under §11 "Not yet tested".
+
+## 15. Research notes
 
 `docs/research/` holds the analysis done before implementation. These files predate the implementation and were written under the old working name "SPT-FuckThisAirdrop"; names, GUIDs and the recommended release point (`IsStatic`) in them are historical. Where they disagree with this document, this document wins.
 
